@@ -58,9 +58,6 @@ pm_stepper_motor_controller.obj: C:/ti/controlSUITE/device_support/F2837xS/v191/
 pm_stepper_motor_controller.obj: C:/ti/controlSUITE/device_support/F2837xS/v191/F2837xS_common/include/F2837xS_Upp_defines.h
 pm_stepper_motor_controller.obj: C:/ti/controlSUITE/device_support/F2837xS/v191/F2837xS_common/include/F2837xS_defaultisr.h
 pm_stepper_motor_controller.obj: C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/math.h
-pm_stepper_motor_controller.obj: C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/string.h
-pm_stepper_motor_controller.obj: C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/stdlib.h
-pm_stepper_motor_controller.obj: C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/stdlibf.h
 
 ../pm_stepper_motor_controller.c: 
 C:/ti/controlSUITE/device_support/F2837xS/v191/F2837xS_common/include/F28x_Project.h: 
@@ -120,6 +117,3 @@ C:/ti/controlSUITE/device_support/F2837xS/v191/F2837xS_common/include/F2837xS_Sy
 C:/ti/controlSUITE/device_support/F2837xS/v191/F2837xS_common/include/F2837xS_Upp_defines.h: 
 C:/ti/controlSUITE/device_support/F2837xS/v191/F2837xS_common/include/F2837xS_defaultisr.h: 
 C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/math.h: 
-C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/string.h: 
-C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/stdlib.h: 
-C:/ti/ccsv6/tools/compiler/ti-cgt-c2000_6.4.10/include/stdlibf.h: 
