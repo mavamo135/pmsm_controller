@@ -20,14 +20,18 @@ void ConfigureEQEP1(void);
 void SetupADCEpwm(Uint16 channel);
 void SetPWMA(float);
 void SetPWMB(float);
+float CalcSpeed(float);
+float CalcPosition(void);
+float CalcTrajectory(float);
+float CalcSpeedDesired(float);
 __interrupt void adca1_isr(void);
 __interrupt void adcb1_isr(void);
 __interrupt void cpu_timer0_isr(void);
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
 //////////////////////////////////////////////////   Controller Gains	//////////////////////////////////////////////////
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
-#define Kp 0.07
-#define Kd 0.00001
+#define Kp 0.1
+#define Kd 0.007
 #define AlphaA 2
 #define AlphaB 2
 #define Gamma2 1
@@ -44,7 +48,7 @@ __interrupt void cpu_timer0_isr(void);
 #define km 0.15					// Motor Torque Constant (N*m/A)
 #define J 0.0001872				// Rotor Inertia (kg*m^2)
 #define b 0.002					// Rotor Damping (N*m/(rad/s))
-#define Nr 100					// Number of teeth
+#define Nr 50					// Number of teeth
 #define Ts 0.001
 #define iTs 1/Ts
 #define Vmax 12
@@ -73,8 +77,8 @@ __interrupt void cpu_timer0_isr(void);
 #pragma DATA_SECTION(VbArray, "SVArray")
 float ThetaArray[RESULTS_BUFFER_SIZE], DThetaArray[RESULTS_BUFFER_SIZE], IaArray[RESULTS_BUFFER_SIZE];
 float IbArray[RESULTS_BUFFER_SIZE], VaArray[RESULTS_BUFFER_SIZE], VbArray[RESULTS_BUFFER_SIZE];
-float time, Va, Vb, Theta, ThetaD, DTheta, DThetaD, DDThetaD, DDDThetaD, Ia, Ib, IaD, IbD, Tau;
-int index = 0, load = 0;
+float time=0, Va=0, Vb=0, Theta=0, ThetaD=0, DTheta=0, DThetaD=0, DDThetaD=0, DDDThetaD=0, Ia=0, Ib=0, IaD=0, IbD=0, Tau=0, IaC=0, IbC=0;
+int index=0, load=0;
 // static float  gammakP[N], gammakA[N], Sigma2, Sigma5;
 
 void main(void){
@@ -309,34 +313,36 @@ __interrupt void adcb1_isr(void){
 }
 
 __interrupt void cpu_timer0_isr(void){
-	static float pastTheta = 0, pastThetaD = 0, aux5;
-	long Counts;
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////		Variables		//////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
+	if (Va<0) Ia = -Ia;
+	IaC = Ia;
+	if (Vb<0) Ib = -Ib;
+	IbC = Ib;
 	time += Ts;
-	//Position Calculation
-	Counts =  -EQep1Regs.QPOSCNT; // Position in Counts 40000(counts)=2pi(rad)
-	Theta = Counts*0.0001570796327L; // Position in Rad
-	aux5 = time*time*time;
-	ThetaD = aux5*((0.00037699L*time*time)-(0.0094248L*time)+0.062832L); //Desired Position (trajectory)
-	//Speed Calculation
-	DTheta = (Theta-pastTheta)*iTs; //Speed in Rad/s
-	DThetaD = (ThetaD-pastThetaD)*iTs; //Speed in rad/s
+	Theta = CalcPosition();
+	ThetaD = CalcTrajectory(time);
+	DTheta = CalcSpeed(Theta);
+	DThetaD = CalcSpeedDesired(ThetaD);
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////		Controller		//////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	Tau = -Kp*(Theta-ThetaD)-Kd*(DTheta-DThetaD);
 	IaD = -Tau*sin(Nr*Theta)*kmI;
 	IbD = Tau*cos(Nr*Theta)*kmI;
-	Va = -AlphaA*(Ia-IaD)+R*IaD-km*DThetaD*sin(Nr*Theta);
-	Vb = -AlphaB*(Ib-IbD)+R*IbD+km*DThetaD*cos(Nr*Theta);
-	//Va = -sin(10*time)*Vmax; // 1500
-	//Vb = cos(10*time)*Vmax;
+	Va = -AlphaA*(IaC-IaD);
+	Vb = -AlphaB*(IbC-IbD);
+	//Va = -AlphaA*(Ia-IaD)+R*IaD-km*DThetaD*sin(Nr*Theta);
+	//Vb = -AlphaB*(Ib-IbD)+R*IbD+km*DThetaD*cos(Nr*Theta);
+	//Va = -sin(100*time)*Vmax; // 1500
+	//Vb = cos(100*time)*Vmax;
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////  Controller Output   //////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	if (time>=tf){
+		GpioDataRegs.GPASET.bit.GPIO15 = 1;
+		GpioDataRegs.GPASET.bit.GPIO17 = 1;
 		SetPWMA(0);
 		SetPWMB(0);
 		//GpioDataRegs.GPATOGGLE.bit.GPIO13 = 1;
@@ -347,8 +353,6 @@ __interrupt void cpu_timer0_isr(void){
 		SetPWMA(Va);
 		SetPWMB(Vb);
 	}
-	pastTheta = Theta;
-	pastThetaD= ThetaD;
 	if (load == 0){
 		ThetaArray[index] = Theta;
 		DThetaArray[index] = DTheta;
@@ -363,6 +367,39 @@ __interrupt void cpu_timer0_isr(void){
 	PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
 }
 
+float CalcSpeed(float T){
+	static float Theta_1=0, Theta_2=0, DTheta_1=0, DTheta_2=0;
+	float DTheta=0;
+	DTheta = 10*T-20*Theta_1+10*Theta_2+1.99*DTheta_1-0.99*DTheta_2;
+	Theta_2 = Theta_1;
+	Theta_1 = T;
+	DTheta_2 = DTheta_1;
+	DTheta_1 = DTheta;
+	return DTheta;
+}
+
+float CalcPosition(void){
+	long Counts=0;
+	float T=0;
+	Counts = -EQep1Regs.QPOSCNT; // Position in Counts 40000(counts)=2pi(rad)
+	T = Counts*0.0001570796327L; // Position in Rad
+	return T;
+}
+
+float CalcTrajectory(float t){
+	float foo=0, trajectory=0;
+	foo = t*t*t;
+	trajectory = foo*((0.00037699L*t*t)-(0.0094248L*t)+0.062832L); //Desired Position (trajectory)
+	return trajectory;
+}
+
+float CalcSpeedDesired(float trajectory){
+	static float pastTrajectory=0;
+	float DTrajectory=0;
+	DTrajectory = (trajectory-pastTrajectory)*iTs; //Speed in rad/s
+	pastTrajectory = trajectory;
+	return DTrajectory;
+}
 /* Calculate position and speed using Example_posspeed.c
 POSSPEED qep_posspeed = POSSPEED_DEFAULTS;
 qep_posspeed.init(&qep_posspeed);
