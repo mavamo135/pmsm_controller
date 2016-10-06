@@ -1,0 +1,23 @@
+[33mcommit 8458308e177a50c3c0346b7652ee462870fa420b[m
+Author: Maximiliano Valencia <mavamo135@gmail.com>
+Date:   Wed Oct 5 19:37:10 2016 -0500
+
+    Replaced acceleration and derivative of acceleration estimates using a high pass filter and got better results. It was coded all the controller except the estimates (integral) and got better results in position control
+
+[33mcommit c101aa981cef6e56e77d092b1b39cd7ca9f8f8db[m
+Author: Maximiliano Valencia <mavamo135@gmail.com>
+Date:   Tue Oct 4 22:35:32 2016 -0500
+
+    Fixed current sensing. Position control started to work
+
+[33mcommit 335976d15511958d32576f5fe4c954d5a46093fa[m
+Author: Maximiliano Valencia <mavamo135@gmail.com>
+Date:   Thu Sep 22 19:51:46 2016 -0500
+
+    Fixed problems with PWM deadband and ADC sampling frequency
+
+[33mcommit 4661d57df4ed8e1796664eaa31672bf7a5df9e1e[m
+Author: Maximiliano Valencia <mavamo135@gmail.com>
+Date:   Wed Jul 27 20:14:36 2016 -0500
+
+    Permanent magnet stepper motor controller for Texas Instruments LAUNCHXL-F28377S board. This is the first version. Modules PWM, ADC and QEP working but controller must be reviewed and tested.
