@@ -22,10 +22,12 @@ void SetPWMA(float);
 void SetPWMB(float);
 float CalcSpeed(float);
 float CalcPosition(void);
-float CalcTrajectory(float);
+float CalcPosDesired(float);
 float CalcSpeedDesired(float);
 float CalcAcelDesired(float);
 float CalcDAcelDesired(float);
+float CalcIntSigma2(float);
+float CalcIntSigma5(float);
 __interrupt void adca1_isr(void);
 __interrupt void adcb1_isr(void);
 __interrupt void cpu_timer0_isr(void);
@@ -33,12 +35,12 @@ __interrupt void cpu_timer0_isr(void);
 //////////////////////////////////////////////////   Controller Gains	//////////////////////////////////////////////////
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
 #define TEST 0
-#define Kp 1	  //0.1, 0.2 -> 0.2
-#define Kd 0.01  //0.007, 0.01 -> 0.1
-#define AlphaA 9 //12, 15, 18 -> 18
-#define AlphaB 9 //12, 15, 18 -> 18
-#define Gamma2 1
-#define Gamma5 1
+#define Kp 1	 //1
+#define Kd 0.01  //0.01
+#define AlphaA 9 //9
+#define AlphaB 9 //9
+#define Gamma2 1 //1
+#define Gamma5 1 //1
 #define GammakP 1
 #define GammakA 1
 #define gamma 1
@@ -58,7 +60,7 @@ __interrupt void cpu_timer0_isr(void);
 #define tf 10
 #define JkmC 1/(J*km)
 #define kmI 1/km
-#define VmaxI 1/(Vmax+0.5)
+#define VmaxI 1/(Vmax) //+0.5
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
 //////////////////////////////////////////////////     uC Constants	    //////////////////////////////////////////////////
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
@@ -80,9 +82,10 @@ __interrupt void cpu_timer0_isr(void);
 #pragma DATA_SECTION(VbArray, "SVArray")
 float ThetaArray[RESULTS_BUFFER_SIZE], DThetaArray[RESULTS_BUFFER_SIZE], IaArray[RESULTS_BUFFER_SIZE];
 float IbArray[RESULTS_BUFFER_SIZE], VaArray[RESULTS_BUFFER_SIZE], VbArray[RESULTS_BUFFER_SIZE];
-float time=0, Va=0, Vb=0, Theta=0, ThetaD=0, DTheta=0, DThetaD=0, DDThetaD=0, DDDThetaD=0, Ia=0, Ib=0, IaD=0, IbD=0, Tau=0, IaC=0, IbC=0;
+float time=0, Va=0, Vb=0, Theta=0, ThetaD=0, DTheta=0, DThetaD=0, DDThetaD=0, DDDThetaD=0, Ia=0, Ib=0, IaD=0, IbD=0, Tau=0;
+float Sigma2=0, Sigma5=0;
 int index=0, load=0;
-// static float  gammakP[N], gammakA[N], Sigma2, Sigma5;
+// static float  gammakP[N], gammakA[N];
 
 void main(void){
 	// Initialize System Control: PLL, WatchDog, enable Peripheral Clocks.
@@ -316,33 +319,39 @@ __interrupt void adcb1_isr(void){
 }
 
 __interrupt void cpu_timer0_isr(void){
+	static float Sigma2D=0, Sigma5D=0;
+	float S=0, C=0;
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////		Variables		//////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	if (Va<0) Ia = -Ia;
-	IaC = Ia;
 	if (Vb<0) Ib = -Ib;
-	IbC = Ib;
 	time += Ts;
 	Theta = CalcPosition();
-	ThetaD = CalcTrajectory(time);
+	ThetaD = CalcPosDesired(time);
 	DTheta = CalcSpeed(Theta);
 	DThetaD = CalcSpeedDesired(ThetaD);
 	DDThetaD = CalcAcelDesired(DThetaD);
 	DDDThetaD = CalcDAcelDesired(DDThetaD);
+	S = sin(Nr*Theta);
+	C = cos(Nr*Theta);
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////		Controller		//////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	Tau = -Kp*(Theta-ThetaD)-Kd*(DTheta-DThetaD)+J*DDThetaD;
-	IaD = -Tau*sin(Nr*Theta)*kmI;
-	IbD = Tau*cos(Nr*Theta)*kmI;
+	IaD = -Tau*S*kmI;
+	IbD = Tau*C*kmI;
+	Sigma2D = -Gamma2*(Ia-IaD)*Tau*DTheta*C;
+	Sigma5D = -Gamma5*(Ib-IbD)*Tau*DTheta*S;
+	Sigma2 = CalcIntSigma2(Sigma2D)*Tau*DTheta;
+	Sigma5 = CalcIntSigma5(Sigma5D)*Tau*DTheta;
 	if (TEST == 1){
 		Va = -sin(100*time)*Vmax; // 1500
 		Vb = cos(100*time)*Vmax;
 	}
 	else{
-		Va = -AlphaA*(Ia-IaD)+R*IaD-km*DThetaD*sin(Nr*Theta)-L*kmI*J*DDDThetaD*sin(Nr*Theta);
-		Vb = -AlphaB*(Ib-IbD)+R*IbD+km*DThetaD*cos(Nr*Theta)+L*kmI*J*DDDThetaD*cos(Nr*Theta);
+		Va = -AlphaA*(Ia-IaD)+Sigma2*C+R*IaD-km*DThetaD*S-L*kmI*J*DDDThetaD*S;
+		Vb = -AlphaB*(Ib-IbD)+Sigma5*S+R*IbD+km*DThetaD*C+L*kmI*J*DDDThetaD*C;
 	}
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////  Controller Output   //////////////////////////////////////////////////
@@ -360,6 +369,9 @@ __interrupt void cpu_timer0_isr(void){
 		SetPWMA(Va);
 		SetPWMB(Vb);
 	}
+	//////////////////////////////////////////////////						//////////////////////////////////////////////////
+	//////////////////////////////////////////////////     Data Arrays	    //////////////////////////////////////////////////
+	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	if (load == 0){
 		ThetaArray[index] = Theta;
 		DThetaArray[index] = DTheta;
@@ -393,7 +405,7 @@ float CalcPosition(void){
 	return T;
 }
 
-float CalcTrajectory(float t){
+float CalcPosDesired(float t){
 	float foo=0, trajectory=0;
 	foo = t*t*t;
 	trajectory = foo*((0.00037699L*t*t)-(0.0094248L*t)+0.062832L); //Desired Position (trajectory)
@@ -428,6 +440,20 @@ float CalcDAcelDesired(float Acel){
 	DAcel_2 = DAcel_1;
 	DAcel_1 = DAcel;
 	return DAcel;
+}
+
+float CalcIntSigma2(float SigmaD){
+	static float Sigma=0, SigmaD_1=0;
+	Sigma = Sigma+(SigmaD+SigmaD_1)*Ts;//*0.5L
+	SigmaD_1 = SigmaD;
+	return Sigma;
+}
+
+float CalcIntSigma5(float SigmaD){
+	static float Sigma=0, SigmaD_1=0;
+	Sigma = Sigma+(SigmaD+SigmaD_1)*Ts;//*0.5L
+	SigmaD_1 = SigmaD;
+	return Sigma;
 }
 /* Calculate position and speed using Example_posspeed.c
 POSSPEED qep_posspeed = POSSPEED_DEFAULTS;
