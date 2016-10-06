@@ -24,16 +24,19 @@ float CalcSpeed(float);
 float CalcPosition(void);
 float CalcTrajectory(float);
 float CalcSpeedDesired(float);
+float CalcAcelDesired(float);
+float CalcDAcelDesired(float);
 __interrupt void adca1_isr(void);
 __interrupt void adcb1_isr(void);
 __interrupt void cpu_timer0_isr(void);
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
 //////////////////////////////////////////////////   Controller Gains	//////////////////////////////////////////////////
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
-#define Kp 0.1
-#define Kd 0.007
-#define AlphaA 2
-#define AlphaB 2
+#define TEST 0
+#define Kp 1	  //0.1, 0.2 -> 0.2
+#define Kd 0.01  //0.007, 0.01 -> 0.1
+#define AlphaA 9 //12, 15, 18 -> 18
+#define AlphaB 9 //12, 15, 18 -> 18
 #define Gamma2 1
 #define Gamma5 1
 #define GammakP 1
@@ -44,8 +47,8 @@ __interrupt void cpu_timer0_isr(void);
 //////////////////////////////////////////////////   System Constants	//////////////////////////////////////////////////
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
 #define R 5.0					// Phase Winding Resistance (Ohm)
-#define L 0.006				// Phase Winding Inductance (H)
-#define km 0.15					// Motor Torque Constant (N*m/A)
+#define L 0.006					// Phase Winding Inductance (H)
+#define km 0.1  				// Motor Torque Constant (N*m/A) 0.15
 #define J 0.0001872				// Rotor Inertia (kg*m^2)
 #define b 0.002					// Rotor Damping (N*m/(rad/s))
 #define Nr 50					// Number of teeth
@@ -325,18 +328,22 @@ __interrupt void cpu_timer0_isr(void){
 	ThetaD = CalcTrajectory(time);
 	DTheta = CalcSpeed(Theta);
 	DThetaD = CalcSpeedDesired(ThetaD);
+	DDThetaD = CalcAcelDesired(DThetaD);
+	DDDThetaD = CalcDAcelDesired(DDThetaD);
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////		Controller		//////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
-	Tau = -Kp*(Theta-ThetaD)-Kd*(DTheta-DThetaD);
+	Tau = -Kp*(Theta-ThetaD)-Kd*(DTheta-DThetaD)+J*DDThetaD;
 	IaD = -Tau*sin(Nr*Theta)*kmI;
 	IbD = Tau*cos(Nr*Theta)*kmI;
-	Va = -AlphaA*(IaC-IaD);
-	Vb = -AlphaB*(IbC-IbD);
-	//Va = -AlphaA*(Ia-IaD)+R*IaD-km*DThetaD*sin(Nr*Theta);
-	//Vb = -AlphaB*(Ib-IbD)+R*IbD+km*DThetaD*cos(Nr*Theta);
-	//Va = -sin(100*time)*Vmax; // 1500
-	//Vb = cos(100*time)*Vmax;
+	if (TEST == 1){
+		Va = -sin(100*time)*Vmax; // 1500
+		Vb = cos(100*time)*Vmax;
+	}
+	else{
+		Va = -AlphaA*(Ia-IaD)+R*IaD-km*DThetaD*sin(Nr*Theta)-L*kmI*J*DDDThetaD*sin(Nr*Theta);
+		Vb = -AlphaB*(Ib-IbD)+R*IbD+km*DThetaD*cos(Nr*Theta)+L*kmI*J*DDDThetaD*cos(Nr*Theta);
+	}
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////  Controller Output   //////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
@@ -399,6 +406,28 @@ float CalcSpeedDesired(float trajectory){
 	DTrajectory = (trajectory-pastTrajectory)*iTs; //Speed in rad/s
 	pastTrajectory = trajectory;
 	return DTrajectory;
+}
+
+float CalcAcelDesired(float Speed){
+	static float Speed_1=0, Speed_2=0, DSpeed_1=0, DSpeed_2=0;
+	float DSpeed=0;
+	DSpeed = 10*Speed-20*Speed_1+10*Speed_2+1.99*DSpeed_1-0.99*DSpeed_2;
+	Speed_2 = Speed_1;
+	Speed_1 = Speed;
+	DSpeed_2 = DSpeed_1;
+	DSpeed_1 = DSpeed;
+	return DSpeed;
+}
+
+float CalcDAcelDesired(float Acel){
+	static float Acel_1=0, Acel_2=0, DAcel_1=0, DAcel_2=0;
+	float DAcel=0;
+	DAcel = 10*Acel-20*Acel_1+10*Acel_2+1.99*DAcel_1-0.99*DAcel_2;
+	Acel_2 = Acel_1;
+	Acel_1 = Acel;
+	DAcel_2 = DAcel_1;
+	DAcel_1 = DAcel;
+	return DAcel;
 }
 /* Calculate position and speed using Example_posspeed.c
 POSSPEED qep_posspeed = POSSPEED_DEFAULTS;
