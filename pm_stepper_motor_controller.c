@@ -35,15 +35,15 @@ __interrupt void cpu_timer0_isr(void);
 //////////////////////////////////////////////////   Controller Gains	//////////////////////////////////////////////////
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
 #define TEST 0
-#define Kp 1	 //1
+#define Kp 0.5	 //1
 #define Kd 0.01  //0.01
 #define AlphaA 9 //9
 #define AlphaB 9 //9
 #define Gamma2 1 //1
 #define Gamma5 1 //1
-#define GammakP 1
-#define GammakA 1
-#define gamma 1
+#define GammakP 0.5 //0.5
+#define GammakA 0.5 //0.5
+#define gamma 9		//9
 #define N 3
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
 //////////////////////////////////////////////////   System Constants	//////////////////////////////////////////////////
@@ -54,11 +54,12 @@ __interrupt void cpu_timer0_isr(void);
 #define J 0.0001872				// Rotor Inertia (kg*m^2)
 #define b 0.002					// Rotor Damping (N*m/(rad/s))
 #define Nr 50					// Number of teeth
+#define np 8					// Number of poles
 #define Ts 0.001
 #define iTs 1/Ts
 #define Vmax 12
 #define tf 10
-#define JkmC 1/(J*km)
+#define JkmI 1/(J*km)
 #define kmI 1/km
 #define VmaxI 1/(Vmax) //+0.5
 //////////////////////////////////////////////////						//////////////////////////////////////////////////
@@ -82,10 +83,12 @@ __interrupt void cpu_timer0_isr(void);
 #pragma DATA_SECTION(VbArray, "SVArray")
 float ThetaArray[RESULTS_BUFFER_SIZE], DThetaArray[RESULTS_BUFFER_SIZE], IaArray[RESULTS_BUFFER_SIZE];
 float IbArray[RESULTS_BUFFER_SIZE], VaArray[RESULTS_BUFFER_SIZE], VbArray[RESULTS_BUFFER_SIZE];
-float time=0, Va=0, Vb=0, Theta=0, ThetaD=0, DTheta=0, DThetaD=0, DDThetaD=0, DDDThetaD=0, Ia=0, Ib=0, IaD=0, IbD=0, Tau=0;
+float time=0;
+float Va=0, Vb=0, Ia=0, Ib=0, IaD=0, IbD=0;
+float Theta=0, ThetaD=0, DTheta=0, DThetaD=0, DDThetaD=0, DDDThetaD=0, Tau=0;
 float Sigma2=0, Sigma5=0;
+static float gammakP[N]={0,0,0}, gammakA[N]={0,0,0};
 int index=0, load=0;
-// static float  gammakP[N], gammakA[N];
 
 void main(void){
 	// Initialize System Control: PLL, WatchDog, enable Peripheral Clocks.
@@ -319,8 +322,14 @@ __interrupt void adcb1_isr(void){
 }
 
 __interrupt void cpu_timer0_isr(void){
-	static float Sigma2D=0, Sigma5D=0;
-	float S=0, C=0;
+	static float Sigma2D=0, Sigma5D=0;						// Integral terms of current loops
+	static float ha=0, hb=0;								//
+	static float gammakPD[N]={0,0,0}, gammakAD[N]={0,0,0}; 	// Derivated torque ripple estimators
+	static float seno=0, cose=0, S[N]={0,0,0}, C[N]={0,0,0};// Sine and cosine
+	static float IaT=0, IbT=0; 								// Currents errors
+	static float ThetaT=0, DThetaT=0;						// Position and speed errors
+	float foo=0, sum=0, sum1=0, sum2=0, aux1=0, aux2=0, aux3=0;
+	int i=0;
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////		Variables		//////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
@@ -333,25 +342,55 @@ __interrupt void cpu_timer0_isr(void){
 	DThetaD = CalcSpeedDesired(ThetaD);
 	DDThetaD = CalcAcelDesired(DThetaD);
 	DDDThetaD = CalcDAcelDesired(DDThetaD);
-	S = sin(Nr*Theta);
-	C = cos(Nr*Theta);
+	seno = sin(Nr*Theta);
+	cose = cos(Nr*Theta);
+	for (i=0; i<N; i++){
+		S[i] = sin((i+1)*np*Theta);
+		C[i] = cos((i+1)*np*Theta);
+	}
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////		Controller		//////////////////////////////////////////////////
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
-	Tau = -Kp*(Theta-ThetaD)-Kd*(DTheta-DThetaD)+J*DDThetaD;
-	IaD = -Tau*S*kmI;
-	IbD = Tau*C*kmI;
-	Sigma2D = -Gamma2*(Ia-IaD)*Tau*DTheta*C;
-	Sigma5D = -Gamma5*(Ib-IbD)*Tau*DTheta*S;
+	ThetaT = Theta-ThetaD;
+	DThetaT = DTheta-DThetaD;
+	sum = 0;
+	for (i=0; i<N; i++){
+		sum = sum+(gammakP[i]*C[i]+gammakA[i]*S[i]);
+	}
+	Tau = -Kp*ThetaT-Kd*DThetaT+sum+J*DDThetaD;
+	IaD = -Tau*seno*kmI;
+	IbD = Tau*cose*kmI;
+	IaT = Ia-IaD;
+	IbT = Ib-IbD;
+	Sigma2D = -Gamma2*IaT*Tau*DTheta*cose;
+	Sigma5D = -Gamma5*IbT*Tau*DTheta*seno;
 	Sigma2 = CalcIntSigma2(Sigma2D)*Tau*DTheta;
 	Sigma5 = CalcIntSigma5(Sigma5D)*Tau*DTheta;
+	sum1 = 0;
+	sum2 = 0;
+	for (i=0; i<N; i++){
+		aux1 = gammakAD[i]*S[i]+gammakA[i]*(i+1)*np*DTheta*C[i];
+		aux2 = gammakPD[i]*C[i]+gammakP[i]*(i+1)*np*DTheta*S[i];
+		aux3 = gammakPD[i]*cose-gammakP[i]*Nr*DTheta*seno;
+		sum1 = sum1+(aux1+aux2);
+		sum2 = sum2+(aux1+aux3);
+	}
+	ha = -L*kmI*(sum1+J*DDDThetaD)*seno;
+	hb = L*kmI*(sum2+J*DDDThetaD)*cose;
 	if (TEST == 1){
 		Va = -sin(100*time)*Vmax; // 1500
 		Vb = cos(100*time)*Vmax;
 	}
 	else{
-		Va = -AlphaA*(Ia-IaD)+Sigma2*C+R*IaD-km*DThetaD*S-L*kmI*J*DDDThetaD*S;
-		Vb = -AlphaB*(Ib-IbD)+Sigma5*S+R*IbD+km*DThetaD*C+L*kmI*J*DDDThetaD*C;
+		Va = -AlphaA*IaT+Sigma2*cose+R*IaD-km*DThetaD*seno+ha;
+		Vb = -AlphaB*IbT+Sigma5*seno+R*IbD+km*DThetaD*cose+hb;
+	}
+	foo = gamma*ThetaT+DThetaT-L*Kd*JkmI*IaT*seno+L*Kd*JkmI*IbT*cose;
+	for (i=0; i<N; i++){
+		gammakPD[i] = -GammakP*foo*C[i];
+		gammakAD[i] = -GammakA*foo*S[i];
+		gammakP[i] = gammakP[i]+gammakPD[i]*Ts;
+		gammakA[i] = gammakA[i]+gammakAD[i]*Ts;
 	}
 	//////////////////////////////////////////////////						//////////////////////////////////////////////////
 	//////////////////////////////////////////////////  Controller Output   //////////////////////////////////////////////////
@@ -408,7 +447,9 @@ float CalcPosition(void){
 float CalcPosDesired(float t){
 	float foo=0, trajectory=0;
 	foo = t*t*t;
-	trajectory = foo*((0.00037699L*t*t)-(0.0094248L*t)+0.062832L); //Desired Position (trajectory)
+	//trajectory = foo*((0.00037699L*t*t)-(0.0094248L*t)+0.062832L); //Desired Position (trajectory)
+	//trajectory = foo*((0.00075398223686L*t*t)-(0.018849555921539L*t)+0.125663706143592L);
+	trajectory = foo*((0.001884955592154L*t*t)-(0.047123889803847L*t)+0.314159265358979L);
 	return trajectory;
 }
 
@@ -443,136 +484,15 @@ float CalcDAcelDesired(float Acel){
 }
 
 float CalcIntSigma2(float SigmaD){
-	static float Sigma=0, SigmaD_1=0;
-	Sigma = Sigma+(SigmaD+SigmaD_1)*Ts;//*0.5L
-	SigmaD_1 = SigmaD;
+	static float Sigma=0; //SigmaD_1=0;
+	Sigma = Sigma+(SigmaD)*Ts;//*0.5L (SigmaD+SigmaD_1)
+	//SigmaD_1 = SigmaD;
 	return Sigma;
 }
 
 float CalcIntSigma5(float SigmaD){
-	static float Sigma=0, SigmaD_1=0;
-	Sigma = Sigma+(SigmaD+SigmaD_1)*Ts;//*0.5L
-	SigmaD_1 = SigmaD;
+	static float Sigma=0; //SigmaD_1=0;
+	Sigma = Sigma+(SigmaD)*Ts;//*0.5L
+	// SigmaD_1 = SigmaD;
 	return Sigma;
 }
-/* Calculate position and speed using Example_posspeed.c
-POSSPEED qep_posspeed = POSSPEED_DEFAULTS;
-qep_posspeed.init(&qep_posspeed);
-qep_posspeed.mech_scaler = 524;
-qep_posspeed.pole_pairs = 1;
-qep_posspeed.calc(&qep_posspeed);// Position and Speed measurement
-positionMechanical = qep_posspeed.theta_mech;
-speedRPM = qep_posspeed.SpeedRpm_pr;
- */
-
-/* Generate sine and cosine waves with PWM
-static float index=0;
-float sine, cosine, uT;
-sine = sin(index)*EPwm7Regs.TBPRD;
-cosine = cos(index)*EPwm9Regs.TBPRD;
-EPwm7Regs.CMPA.bit.CMPA = EPwm7Regs.TBPRD - abs(sine);
-EPwm9Regs.CMPA.bit.CMPA = EPwm9Regs.TBPRD - abs(cosine);
-index += 0.01;
-if (index > 6.2831) {index = 0;}
- */
-
-
-
-
-/* Thesis Controller
-static float gammakPD[N], gammakAD[N], ha, hb, Sigma2D, Sigma5D, Sigma2A, Sigma5A, Dg, g; // {0,0,0,0}
-static float pastTheta, pastThetaD, pastDThetaD, pastDDThetaD;
-static float pastGammakPD[N], pastGammakAD[N], pastSigma2D, pastSigma5D, pastG;
-static float seno[N], cose[N];
-float aux, sum, sum1, sum2, aux1, aux2, aux3, aux4, aux5;
-int k;
-long Counts;
-//////////////////////////////////////////////////						//////////////////////////////////////////////////
-//////////////////////////////////////////////////		Variables		//////////////////////////////////////////////////
-//////////////////////////////////////////////////						//////////////////////////////////////////////////
-time = time+Ts;
-//Position Calculation
-Counts = EQep1Regs.QPOSCNT;
-Theta = Counts*0.0001570796327; //Position in Rad
-aux5 = time*time*time;
-ThetaD = aux5*(0.0000924*time*time-0.0023*time+0.0154); //Desired Position (trajectory)
-//Speed Calculation
-DTheta = (Theta-pastTheta)*iTs; //Speed in Rad/s
-DThetaD = (ThetaD-pastThetaD)*iTs; //Speed in rad/s
-//Acceleration calculation
-DDThetaD = 0*(DThetaD-pastDThetaD)*iTs;
-//Triple derivative calculation
-DDDThetaD = 0*(DDThetaD-pastDDThetaD)*iTs;
-//Load Torque and its derivative
-g = 0;
-Dg = (g-pastG)*iTs;
-//////////////////////////////////////////////////						//////////////////////////////////////////////////
-//////////////////////////////////////////////////		Controller		//////////////////////////////////////////////////
-//////////////////////////////////////////////////						//////////////////////////////////////////////////
-for (k=1;k<=N;k++){
-	seno[k] = sin(k*Nr*Theta);
-	cose[k] = cos(k*Nr*Theta);
-}
-for(k=1;k<N;k++){
-	gammakP[k] = gammakP[k]+(gammakPD[k]+pastGammakPD[k])*Ts*0.5;
-	gammakA[k] = gammakA[k]+(gammakAD[k]+pastGammakAD[k])*Ts*0.5;
-}
-sum = 0;
-for(k=1;k<=N;k++){
-	sum = sum+(gammakP[k]*cose[k]+gammakA[k]*seno[k]);
-}
-//Tau = -Kp*(Theta-ThetaD)-Kd*(DTheta-DThetaD)+sum+g+J*DDThetaD;
-Tau = -Kp*(Theta-ThetaD)-Kd*(DTheta-DThetaD);
-IaD = -Tau*seno[1]*kmC;
-IbD = Tau*cose[1]*kmC;
-aux = gamma*(Theta-ThetaD)-L*Kd*(Ia-IaD)*seno[1]*JkmC+L*Kd*(Ib-IbD)*cose[1]*JkmC+(DTheta-DThetaD);
-for(k=1;k<=N;k++){
-	gammakPD[k] = -GammakP*aux*cose[k];
-	gammakAD[k] = -GammakA*aux*seno[k];
-}
-Sigma2D = -Gamma2*(Ia-IaD)*Tau*DTheta*cose[1];
-Sigma5D = -Gamma5*(Ib-IbD)*Tau*DTheta*seno[1];
-Sigma2A = Sigma2+(Sigma2D+pastSigma2D)*Ts*0.5;
-Sigma5A = Sigma5+(Sigma5D+pastSigma5D)*Ts*0.5;
-Sigma2 = Sigma2A*Tau*DTheta;
-Sigma5 = Sigma5A*Tau*DTheta;
-sum1 = 0;
-sum2 = 0;
-for (k=1;k<=N;k++){
-	aux1 = gammakPD[k]*cose[k]+gammakAD[k]*seno[k]+gammakA[k]*k*DTheta*cose[k];
-	aux2 = gammakP[k]*k*DTheta*seno[k];
-	aux3 = aux1+aux2;
-	aux4 = aux1-aux2;
-	sum1 = sum1+aux3;
-	sum2 = sum2+aux4;
-}
-ha = -(L/km)*(sum1+Dg+J*DDThetaD)*seno[1];
-hb = (L/km)*(sum2+Dg+J*DDThetaD)*cose[1];
-//Va = -AlphaA*(Ia-IaD)+Sigma2*cose[1]+R*IaD-km*DThetaD*seno[1]+ha;
-//Vb = -AlphaB*(Ib-IbD)+Sigma5*seno[1]+R*IbD+km*DThetaD*cose[1]+hb;
-Va = -AlphaA*(Ia-IaD);
-Vb = -AlphaB*(Ib-IbD);
-//////////////////////////////////////////////////						//////////////////////////////////////////////////
-//////////////////////////////////////////////////  Controller Output   //////////////////////////////////////////////////
-//////////////////////////////////////////////////						//////////////////////////////////////////////////
-SetPWMA(Va);
-SetPWMB(Vb);
-if (time>=tf){
-	SetPWMA(0);
-	SetPWMB(0);
-	GpioDataRegs.GPATOGGLE.bit.GPIO13 = 1;
-	asm(" ESTOP0");
-}
-pastTheta = Theta;
-pastThetaD= ThetaD;
-pastDThetaD = DThetaD;
-pastDDThetaD = DDThetaD;
-for(k=1;k<N;k++){
-	pastGammakPD[k] = gammakPD[k];
-	pastGammakAD[k] = gammakAD[k];
-}
-pastSigma2D = Sigma2D;
-pastSigma5D = Sigma5D;
-pastG = g;
-PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
- */
